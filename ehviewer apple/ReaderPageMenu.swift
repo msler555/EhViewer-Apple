@@ -22,12 +22,14 @@ import UIKit
 @MainActor
 enum ReaderImageSaver {
     #if os(iOS)
-    static func saveToPhotos(_ image: UIImage) async {
+        static func saveToPhotos(_ image: UIImage) async {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else {
             EhToast.failure("没有相册权限")
             return
         }
+        // 走 PNG 字节流,不走 creationRequestForAsset(from:),
+        // 避免相册落盘时重编码成 JPEG 导致画质损失。
         guard let data = image.pngData() else {
             EhToast.failure("保存失败")
             return
@@ -37,10 +39,12 @@ enum ReaderImageSaver {
                 let request = PHAssetCreationRequest.forAsset()
                 request.addResource(with: .photo, data: data, options: nil)
             }
-        catch {
+            EhToast.success("已保存到相册")
+        } catch {
             EhToast.failure("保存失败")
         }
     }
+
 
     /// 写成临时文件，交给系统分享/存储面板。
     /// 对齐 Android 的 page_menu_share 与 page_menu_save_to。
