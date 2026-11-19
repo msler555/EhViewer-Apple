@@ -1,0 +1,78 @@
+name: Build unsigned IPA
+
+# 目的:在 GitHub 免费的 macOS runner 上编出**未签名**的 ipa,
+# 交给 Windows 上的 Sideloadly / AltStore 用你自己的 Apple ID 重签。
+# 整条链路不需要本地有 Mac。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 项目要求 iOS 18 SDK 以上,固定旧 Xcode 会报 "iOS 18.0 is not installed",
+      # 所以选镜像上版本最新的那个。
+      - name: Select newest Xcode
+        run: |
+          LATEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          LATEST=${LATEST:-/Applications/Xcode.app}
+          sudo xcode-select -s "$LATEST"
+          xcodebuild -version
+          echo "可用 iOS SDK:"
+          xcodebuild -showsdks | grep -i ios || true
+
+      # 关键:CODE_SIGNING_ALLOWED=NO 才不需要证书和描述文件。
+      # 产出的 .app 是未签名的裸包,后面自己打 Payload。
+      - name: Archive without signing
+        run: |
+          set -x
+          xcodebuild archive \
+            -project "ehviewer apple.xcodeproj" \
+            -scheme "ehviewer apple" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/EhViewer.xcarchive" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
+            ENABLE_BITCODE=NO
+
+      # 打包成 ipa 结构:Payload/<xxx>.app 然后整体 zip。
+      # Sideloadly 只认这个结构。
+      - name: Package into IPA
+        run: |
+          set -euo pipefail
+          APP_PATH=$(find "$RUNNER_TEMP/EhViewer.xcarchive/Products/Applications" -maxdepth 1 -name "*.app" | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::没找到 .app 产物,归档可能失败了"
+            exit 1
+          fi
+          echo "产物: $APP_PATH"
+
+          # 确认二进制架构,没有 arm64 说明编成了模拟器或 x86 包
+          BIN="$APP_PATH/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Info.plist")"
+          lipo -info "$BIN" || true
+
+          rm -rf "$RUNNER_TEMP/Payload"
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
+
+          cd "$RUNNER_TEMP"
+          zip -qry "EhViewer-unsigned.ipa" Payload
+          ls -lh "EhViewer-unsigned.ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: EhViewer-unsigned-ipa
+          path: ${{ runner.temp }}/EhViewer-unsigned.ipa
+          retention-days: 7
+          if-no-files-found: error
