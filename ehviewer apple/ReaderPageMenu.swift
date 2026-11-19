@@ -28,12 +28,16 @@ enum ReaderImageSaver {
             EhToast.failure("没有相册权限")
             return
         }
+        guard let data = image.pngData() else {
+            EhToast.failure("保存失败")
+            return
+        }
         do {
             try await PHPhotoLibrary.shared().performChanges {
-                PHAssetChangeRequest.creationRequestForAsset(from: image)
+                let request = PHAssetCreationRequest.forAsset()
+                request.addResource(with: .photo, data: data, options: nil)
             }
-            EhToast.success("已保存到相册")
-        } catch {
+        catch {
             EhToast.failure("保存失败")
         }
     }
